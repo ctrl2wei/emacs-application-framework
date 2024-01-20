@@ -461,11 +461,25 @@ been initialized."
 
 (defcustom eaf-webengine-unknown-url-scheme-policy "AllowUnknownUrlSchemesFromUserInteraction"
   "Allowed options: DisallowUnknownUrlSchemes, AllowUnknownUrlSchemesFromUserInteraction, or AllowAllUnknownUrlSchemes."
-  :type 'string)
+  :type '(choice (string :tag "Disallows all navigation requests to URLs with unknown schemes." "DisallowUnknownUrlSchemes")
+                 (string :tag "Allows navigation requests to URLs with unknown schemes." "AllowUnknownUrlSchemesFromUserInteraction")
+                 (string :tag "Allows all navigation requests to URLs with unknown schemes." "AllowAllUnknownUrlSchemes.")))
 
 (defcustom eaf-webengine-download-path "~/Downloads"
   "Set the download path for EAF Browser."
   :type 'string)
+
+(defcustom eaf-webengine-httpcache-type "DiskHttpCache"
+  "Set the HTTP cache type for EAF Browser."
+  :type '(choice (string :tag "Use a disk cache." "DiskHttpCache")
+                 (string :tag "Use an in-memory cache." "MemoryHttpCache")
+                 (string :tag "Disable both in-memory and disk caching." "NoCache")))
+
+(defcustom eaf-webengine-persistent-cookies-policy "AllowPersistentCookies"
+  "Set the policy for cookie persistency in EAF Browser."
+  :type '(choice (string :tag "Both session and persistent cookies are stored in memory." "NoPersistentCookies")
+                 (string :tag "Cookies marked persistent are saved to and restored from disk." "AllowPersistentCookies")
+                 (string :tag "Both session and persistent cookies are saved to and restored from disk." "ForcePersistentCookies")))
 
 (defcustom eaf-enable-debug nil
   "If you got segfault error, please turn this option.

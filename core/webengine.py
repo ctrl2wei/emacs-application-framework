@@ -38,6 +38,109 @@ from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineS
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QApplication, QWidget
 
+MOUSE_LEFT_BUTTON = 1
+MOUSE_WHEEL_BUTTON = 4
+MOUSE_BACK_BUTTON = 8
+MOUSE_FORWARD_BUTTON = 16
+
+class BrowserProfile(QWebEngineProfile):
+    init_flag = False
+    binding_page_num = 0
+
+    def __new__(cls, *args, **kwargs):
+        if not hasattr(cls, 'instance'):
+            cls.instance = super(BrowserProfile, cls).__new__(cls, *args, **kwargs)
+        return cls.instance
+
+    def __init__(self):
+        BrowserProfile.binding_page_num += 1
+
+        if BrowserProfile.init_flag:
+            return
+        BrowserProfile.init_flag = True
+
+        super().__init__("eaf_browser")
+
+        (self.eaf_webengine_httpcache_type,
+         self.eaf_webengine_persistent_cookies_policy,
+         self.pc_user_agent,
+         self.font_family,
+         self.fixed_font_family,
+         self.serif_font_family,
+         self.font_size,
+         self.fixed_font_size,
+         self.enable_plugin,
+         self.enable_javascript,
+         self.enable_javascript_access_clipboard,
+         self.enable_scrollbar,
+         self.unknown_url_scheme_policy) = get_emacs_vars(
+             ["eaf-webengine-httpcache-type",
+              "eaf-webengine-persistent-cookies-policy",
+              "eaf-webengine-pc-user-agent",
+              "eaf-webengine-font-family",
+              "eaf-webengine-fixed-font-family",
+              "eaf-webengine-serif-font-family",
+              "eaf-webengine-font-size",
+              "eaf-webengine-fixed-font-size",
+              "eaf-webengine-enable-plugin",
+              "eaf-webengine-enable-javascript",
+              "eaf-webengine-enable-javascript-access-clipboard",
+              "eaf-webengine-enable-scrollbar",
+              "eaf-webengine-unknown-url-scheme-policy"])
+
+        # Sets the HTTP cache type.
+        self.setHttpCacheType(QWebEngineProfile.HttpCacheType[self.eaf_webengine_httpcache_type])
+        # Sets the policy for persistent cookies.
+        self.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy[self.eaf_webengine_persistent_cookies_policy])
+
+        self.settings = self.settings()
+
+        self.setHttpUserAgent(self.pc_user_agent)
+
+        try:
+            if self.font_family:
+                for ff in (
+                        self.settings.FontFamily.StandardFont,
+                        self.settings.FontFamily.CursiveFont,
+                        self.settings.FontFamily.FantasyFont,
+                        self.settings.FontFamily.PictographFont):
+                    self.settings.setFontFamily(ff, self.font_family)
+
+            if self.fixed_font_family:
+                self.settings.setFontFamily(self.settings.FontFamily.FixedFont, self.fixed_font_family)
+
+            if self.serif_font_family:
+                for ff in (
+                        self.settings.FontFamily.SerifFont,
+                        self.settings.FontFamily.SansSerifFont):
+                    self.settings.setFontFamily(ff, self.serif_font_family)
+
+            self.settings.setFontSize(QWebEngineSettings.FontSize.DefaultFontSize, self.font_size)
+            self.settings.setFontSize(QWebEngineSettings.FontSize.DefaultFixedFontSize, self.fixed_font_size)
+
+            self.settings.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
+            self.settings.setAttribute(QWebEngineSettings.WebAttribute.DnsPrefetchEnabled, True)
+            self.settings.setAttribute(QWebEngineSettings.WebAttribute.FocusOnNavigationEnabled, True)
+            self.settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
+            self.settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, self.enable_plugin)
+            self.settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, self.enable_javascript)
+            self.settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, self.enable_javascript_access_clipboard)
+            self.settings.setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, self.enable_scrollbar)
+
+            self.settings.setUnknownUrlSchemePolicy(QWebEngineSettings.UnknownUrlSchemePolicy[self.unknown_url_scheme_policy])
+
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    def try_delete_profile(self):
+        ''' Delete BrowserProfile object unless all web page are closed.'''
+        BrowserProfile.binding_page_num -= 1
+        if not BrowserProfile.binding_page_num:
+            BrowserProfile.init_flag = False
+            delattr(BrowserProfile, 'instance')
+            super().deleteLater()
+
 class BrowserView(QWebEngineView):
 
     translate_selected_text = QtCore.pyqtSignal(str)
@@ -49,7 +152,10 @@ class BrowserView(QWebEngineView):
         self.buffer_id = buffer_id
         self.is_button_press = False
 
-        self.web_page = BrowserPage(profile)
+        self.browser_profile = BrowserProfile()
+        self.browser_cookie_store = self.browser_profile.cookieStore()
+
+        self.web_page = BrowserPage(self.browser_profile, self)
         self.setPage(self.web_page)
 
         self.url_hovered = ""
@@ -60,9 +166,6 @@ class BrowserView(QWebEngineView):
         self.selectionChanged.connect(self.select_text_change)
 
         self.loadProgress.connect(self.load_fix_script)
-
-        # Cookie init.
-        self.cookies_manager = CookiesManager(self)
 
         self.search_term = ""
 
@@ -98,10 +201,10 @@ class BrowserView(QWebEngineView):
              "eaf-webengine-scroll-step"])
 
     def delete_all_cookies(self):
-        self.cookies_manager.delete_all_cookies()
+        self.browser_cookie_store.deleteAllCookies()
 
-    def delete_cookie(self):
-        self.cookies_manager.delete_cookie()
+    def delete_http_cache(self):
+        self.browser_profile.clearHttpCache()
 
     def load_fix_script(self, progress):
         '''We need set environment variable QTWEBENGINE_CHROMIUM_FLAGS with --disable-web-security
@@ -778,8 +881,8 @@ Note, we need hook this function to signal 'loadProgress', signal 'loadStarted' 
 
 
 class BrowserPage(QWebEnginePage):
-    def __init__(self, profile):
-        QWebEnginePage.__init__(self, profile)
+    def __init__(self, profile, parent=None):
+        QWebEnginePage.__init__(self, profile, parent)
 
     def execute_javascript(self, script_src):
         ''' Execute JavaScript.'''
@@ -846,36 +949,16 @@ class BrowserBuffer(Buffer):
 
         (self.pc_user_agent,
          self.phone_user_agent,
-         self.font_family,
-         self.fixed_font_family,
-         self.serif_font_family,
-         self.font_size,
-         self.fixed_font_size,
-         self.enable_plugin,
-         self.enable_javascript,
-         self.enable_javascript_access_clipboard,
-         self.enable_scrollbar,
-         self.unknown_url_scheme_policy,
          self.download_path,
          self.default_zoom,
          self.zoom_step) = get_emacs_vars(
              ["eaf-webengine-pc-user-agent",
               "eaf-webengine-phone-user-agent",
-              "eaf-webengine-font-family",
-              "eaf-webengine-fixed-font-family",
-              "eaf-webengine-serif-font-family",
-              "eaf-webengine-font-size",
-              "eaf-webengine-fixed-font-size",
-              "eaf-webengine-enable-plugin",
-              "eaf-webengine-enable-javascript",
-              "eaf-webengine-enable-javascript-access-clipboard",
-              "eaf-webengine-enable-scrollbar",
-              "eaf-webengine-unknown-url-scheme-policy",
               "eaf-webengine-download-path",
               "eaf-webengine-default-zoom",
               "eaf-webengine-zoom-step"])
 
-        self.profile.setHttpUserAgent(self.pc_user_agent)
+        self.profile = self.buffer_widget.browser_profile
 
         self.caret_js_ready = False
         self.caret_browsing_mode = False
@@ -893,55 +976,8 @@ class BrowserBuffer(Buffer):
         self.buffer_widget.web_page.fullScreenRequested.connect(self.handle_fullscreen_request)
         self.buffer_widget.web_page.pdfPrintingFinished.connect(self.notify_print_message)
         self.buffer_widget.web_page.featurePermissionRequested.connect(self.permission_requested) # enable camera permission
+
         self.profile.downloadRequested.connect(self.handle_download_request)
-
-        self.settings = self.buffer_widget.settings()
-        try:
-
-            if self.font_family:
-                for ff in (
-                        self.settings.FontFamily.StandardFont,
-                        self.settings.FontFamily.CursiveFont,
-                        self.settings.FontFamily.FantasyFont,
-                        self.settings.FontFamily.PictographFont):
-                    self.settings.setFontFamily(ff, self.font_family)
-
-            if self.fixed_font_family:
-                self.settings.setFontFamily(self.settings.FontFamily.FixedFont, self.fixed_font_family)
-
-            if self.serif_font_family:
-                for ff in (
-                        self.settings.FontFamily.SerifFont,
-                        self.settings.FontFamily.SansSerifFont):
-                    self.settings.setFontFamily(ff, self.serif_font_family)
-
-            self.settings.setFontSize(QWebEngineSettings.FontSize.DefaultFontSize, self.font_size)
-            self.settings.setFontSize(QWebEngineSettings.FontSize.DefaultFixedFontSize, self.fixed_font_size)
-
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.DnsPrefetchEnabled, True)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.FocusOnNavigationEnabled, True)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, True)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.AllowGeolocationOnInsecureOrigins, True)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, self.enable_plugin)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, self.enable_javascript)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, self.enable_javascript_access_clipboard)
-            self.settings.setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, self.enable_scrollbar)
-
-            if self.unknown_url_scheme_policy == "DisallowUnknownUrlSchemes":
-                self.settings.setUnknownUrlSchemePolicy(self.settings.UnknownUrlSchemePolicy.DisallowUnknownUrlSchemes)
-            elif self.unknown_url_scheme_policy == "AllowUnknownUrlSchemesFromUserInteraction":
-                self.settings.setUnknownUrlSchemePolicy(self.settings.UnknownUrlSchemePolicy.AllowUnknownUrlSchemesFromUserInteraction)
-            elif self.unknown_url_scheme_policy == "AllowAllUnknownUrlSchemes":
-                self.settings.setUnknownUrlSchemePolicy(self.settings.UnknownUrlSchemePolicy.AllowAllUnknownUrlSchemes)
-
-        except Exception:
-            import traceback
-            traceback.print_exc()
 
         self.build_all_methods(self.buffer_widget)
         self.build_all_methods(self)
@@ -1106,9 +1142,8 @@ class BrowserBuffer(Buffer):
         self.buffer_widget.setUrl(QUrl("about:blank"))
 
         if self.buffer_widget is not None:
-            # NOTE: We need delete QWebEnginePage manual, otherwise QtWebEngineProcess won't quit.
-            self.buffer_widget.web_page.deleteLater()
             self.buffer_widget.deleteLater()
+            self.profile.try_delete_profile()
 
     def get_key_event_widgets(self):
         ''' Send key event to QWebEngineView's focusProxy widget.'''
@@ -1723,152 +1758,6 @@ class ZoomSizeDb(object):
         WHERE Host=?
         """, (host,))
         self._conn.commit()
-
-class CookiesManager(object):
-    def __init__(self, browser_view):
-        self.browser_view = browser_view
-
-        self.cookies_dir = os.path.join(get_emacs_config_dir(), "browser", "cookies")
-
-        self.cookie_store = self.browser_view.page().profile().cookieStore()
-
-        self.cookie_store.cookieAdded.connect(self.add_cookie)      # save cookie to disk when captured cookieAdded signal
-        self.cookie_store.cookieRemoved.connect(self.remove_cookie) # remove cookie stored on disk when captured cookieRemoved signal
-        self.browser_view.loadStarted.connect(self.load_cookie)     # load disk cookie to QWebEngineView instance when page start load
-
-
-    def add_cookie(self, cookie):
-        '''Store cookie on disk.'''
-        cookie_domain = cookie.domain()
-        if not cookie.isSessionCookie():
-            cookie_file = os.path.join(self.cookies_dir, cookie_domain, self._generate_cookie_filename(cookie))
-            touch(cookie_file)
-
-            # Save newest cookie to disk.
-            with open(cookie_file, "wb") as f:
-                f.write(cookie.toRawForm())
-
-    def load_cookie(self):
-        ''' Load cookie file from disk.'''
-        if not os.path.exists(self.cookies_dir):
-            return
-
-        all_cookies_domain = os.listdir(self.cookies_dir)
-
-        for domain in filter(self.domain_matching, all_cookies_domain):
-            from PyQt6.QtNetwork import QNetworkCookie
-
-            domain_dir = os.path.join(self.cookies_dir, domain)
-
-            for cookie_file in os.listdir(domain_dir):
-                with open(os.path.join(domain_dir, cookie_file), "rb") as f:
-                    for cookie in QNetworkCookie.parseCookies(f.read()):
-                        if not domain.startswith('.'):
-                            if self.browser_view.url().host() == domain:
-                                # restore host-only cookie
-                                cookie.setDomain('')
-                                self.cookie_store.setCookie(cookie, self.browser_view.url())
-                        else:
-                            self.cookie_store.setCookie(cookie)
-
-    def remove_cookie(self, cookie):
-        ''' Delete cookie file.'''
-        if not cookie.isSessionCookie():
-            cookie_file = os.path.join(self.cookies_dir, cookie.domain(), self._generate_cookie_filename(cookie))
-
-            if os.path.exists(cookie_file):
-                os.remove(cookie_file)
-
-    def delete_all_cookies(self):
-        ''' Simply delete all cookies stored on memory and disk.'''
-        self.cookie_store.deleteAllCookies()
-        if os.path.exists(self.cookies_dir):
-            import shutil
-            shutil.rmtree(self.cookies_dir)
-
-    def delete_cookie(self):
-        ''' Delete all cookie used by current site except session cookies.'''
-        import shutil
-
-        from PyQt6.QtNetwork import QNetworkCookie
-
-        cookies_domain = os.listdir(self.cookies_dir)
-
-        for domain in filter(self.get_relate_domains, cookies_domain):
-            domain_dir = os.path.join(self.cookies_dir, domain)
-
-            for cookie_file in os.listdir(domain_dir):
-                with open(os.path.join(domain_dir, cookie_file), "rb") as f:
-                    for cookie in QNetworkCookie.parseCookies(f.read()):
-                        self.cookie_store.deleteCookie(cookie)
-            shutil.rmtree(domain_dir)
-
-    def domain_matching(self, cookie_domain):
-        ''' Check if a given cookie's domain is matching for host string.'''
-
-        cookie_is_hostOnly = True
-        if cookie_domain.startswith('.'):
-            # get rid of prefixing dot when matching domains
-            cookie_domain = cookie_domain[1:]
-            cookie_is_hostOnly = False
-
-        host_string = self.browser_view.url().host()
-
-        if cookie_domain == host_string:
-            # The domain string and the host string are identical
-            return True
-
-        if len(host_string) < len(cookie_domain):
-            # For obvious reasons, the host string cannot be a suffix if the domain
-            # is shorter than the domain string
-            return False
-
-        if host_string.endswith(cookie_domain) and host_string[:-len(cookie_domain)][-1] == '.' and not cookie_is_hostOnly:
-            # The domain string should be a suffix of the host string,
-            # The last character of the host string that is not included in the
-            # domain string should be a %x2E (".") character.
-            # and cookie domain not have prefixing dot (host-only cookie is not for subdomains)
-            return True
-
-        return False
-
-    def get_relate_domains(self, cookie_domain):
-        ''' Check whether the cookie domain is located under the same root host as the current URL host.'''
-        import re
-
-        import tld
-
-        host_string = self.browser_view.url().host()
-
-        if cookie_domain.startswith('.'):
-            cookie_domain = cookie_domain[1:]
-
-        base_domain = tld.get_fld(host_string, fix_protocol=True, fail_silently=True)
-
-        if not base_domain:
-            # check whether host string is an IP address
-            if re.compile(r'^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$').match(host_string) and host_string == cookie_domain:
-                return True
-            return  False
-
-        if cookie_domain == base_domain:
-            return True
-
-        if cookie_domain.endswith(base_domain) and cookie_domain[:-len(base_domain)][-1] == '.':
-            return True
-
-        return False
-
-    def _generate_cookie_filename(self, cookie):
-        ''' Gets the name of the cookie file stored on the hard disk.'''
-        name = cookie.name().data().decode("utf-8")
-        domain = cookie.domain()
-        if os.name == "nt":
-            encode_path = cookie.path().encode("utf-8").hex()
-        else:
-            encode_path = cookie.path().replace("/", "|")
-
-        return name + "+" + domain + "+" + encode_path
 
 class TranslateThread(QThread):
 
