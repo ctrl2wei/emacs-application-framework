@@ -44,21 +44,7 @@ MOUSE_BACK_BUTTON = 8
 MOUSE_FORWARD_BUTTON = 16
 
 class BrowserProfile(QWebEngineProfile):
-    init_flag = False
-    binding_page_num = 0
-
-    def __new__(cls, *args, **kwargs):
-        if not hasattr(cls, 'instance'):
-            cls.instance = super(BrowserProfile, cls).__new__(cls, *args, **kwargs)
-        return cls.instance
-
     def __init__(self):
-        BrowserProfile.binding_page_num += 1
-
-        if BrowserProfile.init_flag:
-            return
-        BrowserProfile.init_flag = True
-
         super().__init__("eaf_browser")
 
         (self.eaf_webengine_httpcache_type,
@@ -133,13 +119,7 @@ class BrowserProfile(QWebEngineProfile):
             import traceback
             traceback.print_exc()
 
-    def try_delete_profile(self):
-        ''' Delete BrowserProfile object unless all web page are closed.'''
-        BrowserProfile.binding_page_num -= 1
-        if not BrowserProfile.binding_page_num:
-            BrowserProfile.init_flag = False
-            delattr(BrowserProfile, 'instance')
-            super().deleteLater()
+browser_profile = BrowserProfile()
 
 class BrowserView(QWebEngineView):
 
@@ -152,7 +132,8 @@ class BrowserView(QWebEngineView):
         self.buffer_id = buffer_id
         self.is_button_press = False
 
-        self.browser_profile = BrowserProfile()
+        # self.browser_profile = BrowserProfile()
+        self.browser_profile = browser_profile
         self.browser_cookie_store = self.browser_profile.cookieStore()
 
         self.web_page = BrowserPage(self.browser_profile, self)
@@ -1143,7 +1124,6 @@ class BrowserBuffer(Buffer):
 
         if self.buffer_widget is not None:
             self.buffer_widget.deleteLater()
-            self.profile.try_delete_profile()
 
     def get_key_event_widgets(self):
         ''' Send key event to QWebEngineView's focusProxy widget.'''
